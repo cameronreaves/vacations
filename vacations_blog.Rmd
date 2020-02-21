@@ -1,0 +1,267 @@
+---
+title: "Where do we go from here?"
+author: "Cameron Reaves"
+output: html_document
+css: air-master/css/air_modified.css 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Introduction
+
+My partner and I have plans to travel the world some day. But, after talking about the places that we would want to go visit, I realized that we had one obvious problem: our preferences were different. I am quite the nerd. Over the years, I've watched hundreds of episodes of various Anime series and read tens of Sci-Fiction novels. As a result, I very much want to visit bustling and futuristic East Asian metropoleis like Seoul and Tokyo. My partner, however, has always been fascinated with the Continent. She wants to experience, first hand, how the Rwandan people survived and moved past the horror of their history. She would like to journey across the Safari, and learn from the cultures of indigeous peoples still living the way their ancestors have for thousands of years.
+
+Unfortunately, money don't grow on trees.
+
+![Here is a pug with money](money.gif)
+
+
+We probably won't be able to visit every single place that we each individually would want to visit. Unless one of us (or better yet both) sells our soul in exchange for affordable health care and copious paid vacation time off, it is unlikely we will have the financial means nor time to visit everywhere anytime soon. I realized then that this is just an optimization problem. The question is: How can my partner and I maximize our total utility (visit the places we both want to visit the most) given the constraints of resources like time and money? There is only one answer: DATA (pronounced with a German accent). 
+
+I figured that if my partner and I ranked the places we wanted to visit with our preferences, we could use characteristics about those places to determine where to go next!
+
+![Me and my partner "*fingers crossed*"](tourist.gif)
+
+## Data Scraping
+```{r tools, include = FALSE}
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(forcats)
+library(grid)
+library(ggrepel)
+```
+First, I needed to find a dataset that had lots of cities and some revelant data or metrics on those cities. After some google searches, I found a website called https://www.numbeo.com/. Numbeo is self-described as the world’s largest database of user contributed data about cities and countries worldwide. I don't know if that's true but it had rankings and indices on cost of living, housing indicators, health care, traffic, crime, pollution, etc, which was perfect for what I was trying to do. 
+
+I used the SelectorGadget and the r package "rvest". The selector tool enabled me to point and click CSS selectors on the page, and then reference them in my code. This tool can be found here. https://selectorgadget.com/. At first, I was a bit stuck. Sometimes, the tool would give me the right css selector for one column of a table, but not the next. But then I realized that on each page, the css selector was the same. So, I could just iterate over the table using a for loop and automate the whole process. 
+
+Below is code that interates over the Numbeo cost of living webpage for the Africa region. 
+```{r}
+url <- 'https://www.numbeo.com/cost-of-living/region_rankings.jsp?title=2019-mid&region=002'
+
+#Reading the HTML code from the website
+
+web <- read_html(url)
+data = vector(mode = "list", 6)
+x = 1
+c = 'td:nth-child(' 
+b = ')'
+a = 3
+f = paste(c,a,b)
+for(i in c(3:8)){
+  #Using CSS selectors to scrape
+  
+  table <- html_nodes(web,paste(c,i,b))
+  
+  #Converting the data to numeric
+  table_data <- as.numeric(html_text(table))
+  data[[x]] = table_data
+  x = x + 1;
+}
+#Scraping city names
+names <- html_nodes(web,'.cityOrCountryInIndicesTable')
+
+names_data <- html_text(names)
+
+dataframe = data.frame(name = c(names_data), cost_of_living = c(data[[1]]),rent = c(data[[2]]), col_plus_rent = c(data[[3]]), 
+                  grocery = c(data[[4]]), rest = c(data[[5]]), pow_pur_ind = c(data[[6]]), region = "Africa")
+```
+
+Here is some code displaying just the first three observations.
+```{r}
+dataframe %>% 
+  as_tibble() %>% 
+  head(n=3)
+```
+
+For regions, Europe, Africa, and Asia, I repeat this process, scraping data on metrics spanning: cost of living, pollution, and crime. I could have scraped this data directly from the main page for each metric, but that would have just given me the city and country, not the region.  I would have had to do extra work to figure out which city was in which region.
+
+## Manipulating Cities Data 
+I now had nine dataframes: one per region per metric. And I wanted to combine them all together so I would have one dataframe. Using a left_join one at a time, I merged the pollution and crime dataframes into the dataframe containing the cost of living dataframe. To avoid double counting the column region, I passed into the select method -c(region). 
+```{r include=FALSE}
+africa_vac <- readRDS("africa_vac.rds")
+africa_vac_crime <- readRDS("africa_vac_crime.rds")
+africa_vac_poll <- readRDS("africa_vac_poll.rds")
+vacation_data <- readRDS("vacation_data.rds")
+vacation_data <- vacation_data %>% 
+  select(-nay_pref, -cam_pref, -pref)
+```
+
+
+```{r include=FALSE}
+africa_vac <- africa_vac %>% 
+  mutate(name = as.character(name))
+africa_vac_crime <- africa_vac_crime %>% 
+  mutate(name = as.character(name))
+africa_vac_poll <- africa_vac_poll %>% 
+  mutate(name = as.character(name))
+```
+Now, the dataframe, africa, has all the variables and observations from each of the three africa datasets. NA's have filled in cells where city data does not exist for that metric. 
+```{r join}
+africa_vac <- left_join(africa_vac, select (africa_vac_poll, -c(region)), by= "name")
+africa <- left_join(africa_vac, select (africa_vac_crime, -c(region)), by= "name")
+names(africa)
+```
+I used that process for each region until I had three complete dataframes, and the used the method rbind() to put them all together. 
+```{r eval= FALSE}
+vacation_data <- rbind(africa, asia, europe)
+```
+
+Here is a few randomly generated observations from the vacation_data dataframe.
+```{r fig.width=20, fig.height=8}
+ind <- sample(dim(vacation_data)[1],4, replace = FALSE, prob = NULL)
+as_tibble(vacation_data[ind,])
+```
+
+There are currently over 200 something cities in the complete data frame, many of which, my partner nor I have ever heard of. It felt odd rating a city that we knew nothing about. I anticipated that we would rate it very low (what could we be excited about?) or just rate it based on the country that it is in. This would, I hypothesized, skew up our preference towards cities that are more well known and deflate the ratings of unknown cities. Besides that, it would also take us long time to rate properly--going down a list of cities one at a time. To fix this problem, I split the name column into two columns: city and country using a tidyr method called seperate(). Now a factor, there are only 84 levels for the country variable, much more managable to rate. 
+```{r}
+vacation_data <- vacation_data %>% 
+  separate(name, c("city", "country"), sep = ",") %>%
+  mutate(country = as.factor(country))
+length(levels(vacation_data$country))
+```
+
+## Getting Preferences
+To make preference collection more user-friendy, I selected just levels of the country variable from vacation_data into a tibble and exported it as a txt file for excel. 
+```{r}
+countries <- levels(vacation_data$country)
+as_tibble(countries)
+write.table(countries, "countries.txt", sep="\t")
+```
+
+After the txt file was filed out by hand in the most professional manner possible, I then imported back into my workspace as a csv file. Once again, I used left join to join the two dataframes together. Perfecto!
+```{r}
+vacation_pref <- read.csv("vacation_pref.csv", sep=",")
+vacation_data <- left_join(vacation_data, vacation_pref, by= "country")
+```
+
+```{r}
+vacation_data <- vacation_data %>%
+  mutate(comb = naomi + cam) 
+```
+
+## Data Visualization
+Whew, that was a lot of work! But now comes the cool part. Visualizing and understanding what the data means for my partner and I. And finally answering the question that we have been waiting for...where do we go from here?
+
+Well, the easiest question to start with is how did our preferences vary. From the two bar charts, produced using ggplot2's geom_bar(), it seems that the data provides evidence to support my initial hypothesis that Naomi wants to travel to Africa the most. Namely, it apepars that Naomi, on average, ranked countries in Africa the highest. But what is also interesting is that there seems to be evidence that I am much more impartial when ranking countries between regions. In other words, although the region Asia had the highest average preference score, that does guruantee that a significant difference in preference between the other regions exists. On average, the error bars (+/- one standard deviation)  for that region include the means of other regions. 
+```{r echo = FALSE}
+vacation_data %>%
+  group_by(region) %>% 
+  summarize(mean_naomi = mean(naomi), std_naomi = sd(naomi)) %>% 
+  ggplot(aes(x = region, y = mean_naomi, fill = region)) +
+  geom_bar(stat="identity") + 
+  scale_y_continuous("Mean Preference Score", limits = c(0, 8)) + 
+  geom_errorbar(aes(ymin=mean_naomi-std_naomi, ymax=mean_naomi+std_naomi), width=.2, position=position_dodge(.9)) + 
+  labs(title = "Naomi's Preference by Region")
+
+vacation_data %>%
+  group_by(region) %>% 
+  summarize(mean_cam = mean(cam), std_cam = sd(cam)) %>% 
+  ggplot(aes(x = region, y = mean_cam, fill = region)) +
+  geom_bar(stat="identity") + 
+  scale_y_continuous("Mean Preference Score", limits = c(0, 8)) + 
+  geom_errorbar(aes(ymin=mean_cam-std_cam, ymax=mean_cam+std_cam), width=.2, position=position_dodge(.9)) + 
+  labs(title = "Cam's Preference by Region")
+```
+
+
+Next, I wanted to look at another bar chart that shows the combined mean preference score grouped by region. "Tsamina mina eh eh, Waka waka eh ehhe!" The region Africa has the highest combined mean preference score for the countries ranked from that region, which indicates that we should priorize region Africa when planning our future trips. I will note however that the upped end of the error bar for the region Asia extends just a bit beyond the error bar for Africa, suggesting that preference for Asia could potentially be above Africa. Nevertheless, we will work with the Africa region for the next part. 
+ 
+ 
+```{r echo = FALSE}
+vacation_data %>%
+  group_by(region) %>% 
+  summarize(mean_comb = mean(comb), std_comb = sd(comb)) %>% 
+  ggplot(aes(x = region, y = mean_comb, fill = region)) +
+  geom_bar(stat="identity") + 
+  scale_y_continuous("Mean Preference Score", limits = c(0, 14)) + 
+  geom_errorbar(aes(ymin=mean_comb-std_comb, ymax=mean_comb+std_comb), width=.2, position=position_dodge(.9)) + 
+  labs(title = "Combined Preference by Region")
+```
+
+
+Now that we have a region. Where in that region is the best place to go? Well, I decided to make a graph that is definitely pushing up against the limits of TMI (too much information), but I wanted to showcase my skills! We have safety on the x axis and cost of living on the y axis. Obviously, the higher up on the safety index a city is, the more safe it is. That is quite intuitive for the viewer (you); however, for the cost of living index, I wanted make sure that that metric is displayed accurately. The higher up on the cost of living index, the more expensive the city, so I reversed the axis so that the upper right hand corner is where the most desirable cities will be. Dashed lines drawing the quandrants are supposed help the viewer see this trend. Next, the metrics, combined preference and pollution index, are displayed by color and size, respectively. The lighter the coordinate point, the higher the combinded preference for that city; the larger the size of that point, the more polluted that city. 
+
+From this data, it appears that cities in North Africa (Tunis, Algiers, Cairo, Alexandra, Casablanca) have the lowest cost of living and arer the highest on the safety index in the region Africa, pollution being relatively similar between cities. Which cities do we prefer the most? Cairo and Alexandra (Egypt) have much lighter colors than the others, and so, appear to be the prefered destination for the both of us. It looks like we are headed to the Pyramids!
+
+```{r echo = FALSE}
+grob1 <- grobTree(textGrob("Low Cost of Living", x=.05,  y=.98, hjust=0,
+  gp=gpar(col="black", fontsize=9, fontface="italic")))
+grob2 <- grobTree(textGrob("High Safety", x=.85,  y=.05, hjust=0,
+  gp=gpar(col="black", fontsize=9, fontface="italic")))
+set.seed(20)
+
+vacation_data %>% 
+  filter(region == "Africa", !is.na(safety), !is.na(cost_of_living), !is.na(poll_ind)) %>% 
+ggplot(aes(x = safety, y = cost_of_living, col=comb, size = poll_ind)) + 
+  geom_point() + 
+  geom_text_repel(aes(label = city)) + 
+  scale_y_reverse() +
+  annotation_custom(grob1) +
+  annotation_custom(grob2) + 
+  geom_hline(yintercept=42.5, linetype="dashed", color = "gray") +
+  geom_vline(xintercept=40, linetype="dashed", color = "gray") + 
+  labs(y = "cost of living", title = "African cities and various metrics", col = "Combined Preference", size = "Pollution Index" )
+```
+
+```{r echo = FALSE}
+# 
+# 
+# ggplot(vacation_data, aes(comb, cost_of_living,col=region)) +
+#   geom_point() + 
+#   geom_jitter() +
+#   scale_y_reverse() +
+#   facet_wrap(~region)
+# 
+# # vacation_data %>% 
+# #   filter(comb > 10, cost_of_living < 40, region == "Africa") %>% 
+# #   ggplot(aes(comb, cost_of_living,label=city), size = .01) +
+# #   geom_text() + 
+# #   scale_y_reverse() 
+# 
+# q.25_cost = vacation_data %>%
+#   group_by(region) %>%
+#   summarize(q = quantile(cost_of_living, probs=0.25, na.rm=TRUE))
+# 
+# 
+# # vacation_data %>%
+# #   filter(comb > as.numeric(q.75_comb[1,2]), region == "Africa") %>%
+# #   ggplot(aes(comb, cost_of_living,label=city), size = .01) +
+# #   geom_text() +
+# #   scale_y_reverse()
+# 
+# vacation_data %>%
+#   filter(cost_of_living < as.numeric(q.25_cost[2,2]), region == "Asia") %>%
+#   ggplot(aes(comb, cost_of_living,label=city), size = .01) +
+#   geom_text() +
+#   scale_y_reverse()
+# 
+# vacation_data %>%
+#   filter(cost_of_living < as.numeric(q.25_cost[2,2]), region == "Asia") %>%
+#   ggplot(aes(comb, cost_of_living,label=country), size = .01) +
+#   geom_text() +
+#   scale_y_reverse()
+```
+
+## Conclusion 
+A lot this worked out better than I thought that it would. Still, I'm sure that there are things that I could have done better or more efficiently. One issue is that Numbeo, where I got the city data, didn't have as much data on Africa and Asia as it did Europe (just check out that graph). 
+```{r echo=FALSE}
+ggplot(vacation_data, aes(region, fill = region)) +
+  geom_bar() +
+  coord_flip()
+```
+
+So that is a bit of a bummer. Another issue is that the preference/ranking could have been more scientific. I went down the list of an excel spreadsheet calling out country names to a tired Naomi, who seemed to only rank cities with a 1 or a 7 (see below). 
+```{r echo=FALSE}
+vacation_data %>% 
+ggplot(aes(naomi, fill = region)) +
+  geom_histogram(binwidth = .5) + 
+  scale_x_continuous("Naomi's Preference",breaks = c(1:7))
+```
+
+Besides that I am quite happy. This is literally all my work, and I am proud of what I made. I feel like Naruto after he finally mastered the rasengan. 
+
+![](naruto.gif)
